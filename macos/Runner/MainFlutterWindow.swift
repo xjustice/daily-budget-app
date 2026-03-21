@@ -4,12 +4,13 @@ import FlutterMacOS
 class MainFlutterWindow: NSWindow {
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
-    let windowFrame = self.frame
+    var windowFrame = self.frame
+    windowFrame.size = NSSize(width: 412, height: 915)
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
+    self.center() // Optionally center the phone-sized window
 
     RegisterGeneratedPlugins(registry: flutterViewController)
-
     super.awakeFromNib()
   }
 }

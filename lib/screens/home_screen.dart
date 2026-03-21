@@ -1,9 +1,11 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:table_calendar/table_calendar.dart';
+import 'dart:ui';
 import '../db/db_helper.dart';
 import '../models/expense.dart';
+import '../models/character.dart';
 import '../main.dart';
 import '../l10n/app_localizations.dart';
 import 'add_screen.dart';
@@ -20,22 +22,16 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Expense> _expenses = [];
   Map<String, int> _totals = {'income': 0, 'expense': 0, 'balance': 0};
   bool _isLoading = true;
+  DateTime _focusedDay = DateTime.now();
+  DateTime _selectedDay = DateTime.now();
+  CalendarFormat _calendarFormat = CalendarFormat.month; // Start with month view
+  bool _isDateFiltered = false; // Add state to track if filtered by date
+  Map<String, Map<String, int>> _dailyTotals = {}; // Store {dateString: {'income': sum, 'expense': sum}}
 
   @override
   void initState() {
     super.initState();
     _refreshData();
-  }
-
-  Future<void> _refreshData() async {
-    setState(() => _isLoading = true);
-    final data = await _dbHelper.getAllExpenses();
-    final totals = await _dbHelper.getTotals();
-    setState(() {
-      _expenses = data;
-      _totals = totals;
-      _isLoading = false;
-    });
   }
 
   Future<void> _addMockData() async {
@@ -45,15 +41,50 @@ class _HomeScreenState extends State<HomeScreen> {
     _refreshData();
   }
 
+  Future<void> _refreshData() async {
+    setState(() => _isLoading = true);
+    final data = await _dbHelper.getAllExpenses();
+    final totals = await _dbHelper.getTotals();
+    
+    // Group totals by date for calendar display
+    Map<String, Map<String, int>> daily = {};
+    for (var e in data) {
+      daily.putIfAbsent(e.date, () => {'income': 0, 'expense': 0});
+      daily[e.date]![e.type] = (daily[e.date]![e.type] ?? 0) + e.amount;
+    }
+
+    setState(() {
+      _dailyTotals = daily;
+      // Filter expenses by selected date ONLY if isDateFiltered is true
+      if (_isDateFiltered) {
+        _expenses = data.where((e) => e.date == DateFormat('yyyy-MM-dd').format(_selectedDay)).toList();
+      } else {
+        _expenses = data;
+      }
+      _totals = totals;
+      _isLoading = false;
+    });
+  }
+
   String _formatAmount(int amount, String localeCode, double rate) {
     bool isEn = localeCode == 'en';
     double converted = isEn ? amount * rate : amount.toDouble();
     final formatter = NumberFormat.currency(
       locale: isEn ? 'en_US' : 'ko_KR',
       symbol: isEn ? '\$' : '₩',
-      decimalDigits: 0,
+      decimalDigits: isEn ? 2 : 0,
     );
-    return formatter.format(converted.toInt());
+    return formatter.format(isEn ? converted : converted.toInt());
+  }
+
+  String _formatCompact(int amount, String localeCode, double rate) {
+    bool isEn = localeCode == 'en';
+    double converted = isEn ? amount * rate : amount.toDouble();
+    if (isEn) {
+       return "\$${NumberFormat.compact().format(converted)}";
+    } else {
+       return NumberFormat.compact(locale: 'ko_KR').format(converted);
+    }
   }
 
   @override
@@ -62,6 +93,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final appProvider = Provider.of<AppProvider>(context);
     final isEn = appProvider.locale.languageCode == 'en';
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final size = MediaQuery.of(context).size;
+    final screenHeight = size.height;
+    
+    // More compact dynamic values for "all-in-one" screen look
+    final double dynamicRowHeight = (screenHeight * 0.075).clamp(58, 65);
+    final double dynamicBottomSpacer = (screenHeight * 0.15).clamp(100, 180);
 
     // Dark Mode Theme Color Palette
     final bgColor1 = isDark ? const Color(0xFF0F172A) : const Color(0xFFE0EAFC);
@@ -115,18 +153,55 @@ class _HomeScreenState extends State<HomeScreen> {
           CustomScrollView(
             physics: const BouncingScrollPhysics(),
             slivers: [
-              _buildAppBar(l10n, appProvider, textColor),
+              _buildAppBar(l10n, appProvider, textColor, isDark, glassColor, glassBorder, secondaryTextColor),
               _buildSummaryHeader(l10n, appProvider, glassColor, glassBorder, textColor, secondaryTextColor),
+              _buildCharacterSection(l10n, appProvider, glassColor, glassBorder, textColor, secondaryTextColor),
+              _buildCalendarSection(l10n, appProvider, isDark, glassColor, glassBorder, textColor, dynamicRowHeight),
+              if (_isDateFiltered) 
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("${DateFormat('yyyy-MM-dd').format(_selectedDay)} ${l10n.translate('history') ?? 'History'}", style: TextStyle(color: textColor, fontWeight: FontWeight.bold)),
+                        Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.amber),
+                              onPressed: () async {
+                                final result = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => AddScreen(initialDate: _selectedDay)),
+                                );
+                                if (result == true) _refreshData();
+                              },
+                            ),
+                            ActionChip(
+                              label: Text(l10n.translate('view_all') ?? 'View All'),
+                              onPressed: () {
+                                setState(() => _isDateFiltered = false);
+                                _refreshData();
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               _isLoading
                   ? const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
                   : _expenses.isEmpty
                       ? _buildEmptyState(l10n, secondaryTextColor)
                       : _buildGlassList(l10n, appProvider, glassColor, glassBorder, textColor, secondaryTextColor),
+              SliverToBoxAdapter(child: SizedBox(height: dynamicBottomSpacer)),
             ],
           ),
         ],
       ),
       floatingActionButton: _buildGlassFAB(l10n, isDark),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 
@@ -134,7 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(width: size, height: size, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
   }
 
-  Widget _buildAppBar(AppLocalizations l10n, AppProvider provider, Color textColor) {
+  Widget _buildAppBar(AppLocalizations l10n, AppProvider provider, Color textColor, bool isDark, Color glassColor, Color glassBorder, Color secondaryTextColor) {
     return SliverAppBar(
       backgroundColor: Colors.transparent,
       elevation: 0,
@@ -144,15 +219,95 @@ class _HomeScreenState extends State<HomeScreen> {
         onLongPress: _addMockData,
         child: Text(
           l10n.translate('app_title'),
-          style: TextStyle(color: textColor, fontWeight: FontWeight.w800, fontSize: 24),
+          style: TextStyle(color: textColor, fontWeight: FontWeight.w900, fontSize: 24),
         ),
       ),
       actions: [
+        // Reset Data Button
+        IconButton(
+          icon: Icon(Icons.refresh, color: textColor),
+          onPressed: () async {
+            final confirm = await showGeneralDialog<bool>(
+              context: context,
+              barrierDismissible: true,
+              barrierLabel: '',
+              pageBuilder: (ctx, anim1, anim2) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(40),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(32),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                      child: Container(
+                        padding: const EdgeInsets.all(30),
+                        decoration: BoxDecoration(
+                          color: glassColor,
+                          borderRadius: BorderRadius.circular(32),
+                          border: Border.all(color: glassBorder),
+                        ),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), shape: BoxShape.circle),
+                                child: const Icon(Icons.warning_rounded, color: Colors.red, size: 40),
+                              ),
+                              const SizedBox(height: 20),
+                              Text(l10n.translate('reset_data'), style: TextStyle(color: textColor, fontWeight: FontWeight.w900, fontSize: 20)),
+                              const SizedBox(height: 12),
+                              Text(
+                                l10n.translate('reset_confirm'),
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: secondaryTextColor, fontSize: 14),
+                              ),
+                              const SizedBox(height: 32),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextButton(
+                                      onPressed: () => Navigator.pop(ctx, false),
+                                      child: Text(l10n.translate('cancel'), style: TextStyle(color: textColor.withOpacity(0.6))),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.red.withOpacity(0.8),
+                                        foregroundColor: Colors.white,
+                                        elevation: 0,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                        padding: const EdgeInsets.symmetric(vertical: 14),
+                                      ),
+                                      onPressed: () => Navigator.pop(ctx, true),
+                                      child: Text(l10n.translate('reset'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+            if (confirm == true) {
+              await provider.resetData();
+              _refreshData();
+            }
+          },
+        ),
         // Theme Toggle Icon
         IconButton(
           onPressed: provider.toggleTheme,
           icon: Icon(
-            provider.themeMode == ThemeMode.dark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+            isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
             color: textColor,
           ),
         ),
@@ -180,19 +335,16 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildSummaryHeader(AppLocalizations l10n, AppProvider provider, Color glassColor, Color glassBorder, Color textColor, Color secondaryTextColor) {
-    final languageCode = provider.locale.languageCode;
-    final rate = provider.rate;
-
+  Widget _buildCalendarSection(AppLocalizations l10n, AppProvider provider, bool isDark, Color glassColor, Color glassBorder, Color textColor, double dynamicRowHeight) {
     return SliverToBoxAdapter(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(32),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
             child: Container(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: glassColor,
                 borderRadius: BorderRadius.circular(32),
@@ -200,18 +352,305 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: Column(
                 children: [
-                  Text(l10n.translate('balance'), style: TextStyle(color: secondaryTextColor, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8),
+                  // Custom Format Picker & Today Button
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _buildFormatPicker(l10n, isDark, textColor, glassColor, glassBorder),
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _selectedDay = DateTime.now();
+                              _focusedDay = DateTime.now();
+                              _isDateFiltered = true;
+                            });
+                            _refreshData();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: glassBorder),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.today, size: 14, color: textColor),
+                                const SizedBox(width: 4),
+                                Text(
+                                  l10n.translate('today') ?? 'Today',
+                                  style: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TableCalendar(
+                    locale: provider.locale.languageCode == 'ko' ? 'ko_KR' : 'en_US',
+                    firstDay: DateTime.utc(2020, 1, 1),
+                    lastDay: DateTime.utc(2030, 12, 31),
+                    focusedDay: _focusedDay,
+                    calendarFormat: _calendarFormat,
+                    availableCalendarFormats: const {
+                      CalendarFormat.month: 'Month',
+                      CalendarFormat.twoWeeks: '2 Weeks',
+                      CalendarFormat.week: 'Week',
+                    },
+                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                    rowHeight: dynamicRowHeight, // Dynamic responsive height
+                    daysOfWeekHeight: 40,
+                    onDaySelected: (selectedDay, focusedDay) {
+                      setState(() {
+                        _selectedDay = selectedDay;
+                        _focusedDay = focusedDay;
+                        _isDateFiltered = true;
+                      });
+                      _refreshData();
+                    },
+                    onDayLongPressed: (selectedDay, focusedDay) async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => AddScreen(initialDate: selectedDay)),
+                      );
+                      if (result == true) _refreshData();
+                    },
+                    onFormatChanged: (format) {
+                      setState(() => _calendarFormat = format);
+                    },
+                    headerStyle: HeaderStyle(
+                      formatButtonVisible: false, // Turn off the confusing button
+                      titleCentered: true,
+                      titleTextStyle: TextStyle(color: textColor, fontWeight: FontWeight.bold),
+                      leftChevronIcon: Icon(Icons.chevron_left, color: textColor),
+                      rightChevronIcon: Icon(Icons.chevron_right, color: textColor),
+                    ),
+                    calendarStyle: CalendarStyle(
+                      defaultTextStyle: TextStyle(color: textColor),
+                      weekendTextStyle: const TextStyle(color: Colors.redAccent),
+                      outsideDaysVisible: false,
+                      selectedDecoration: const BoxDecoration(color: Colors.amber, shape: BoxShape.circle),
+                      todayDecoration: BoxDecoration(color: Colors.amber.withOpacity(0.3), shape: BoxShape.circle),
+                    ),
+                    daysOfWeekStyle: DaysOfWeekStyle(
+                      weekdayStyle: TextStyle(color: textColor.withOpacity(0.6)),
+                      weekendStyle: const TextStyle(color: Colors.redAccent),
+                    ),
+                    calendarBuilders: CalendarBuilders(
+                      markerBuilder: (context, date, events) {
+                        final dateStr = DateFormat('yyyy-MM-dd').format(date);
+                        final dayData = _dailyTotals[dateStr];
+                        if (dayData == null) return null;
+
+                        final income = dayData['income'] ?? 0;
+                        final expense = dayData['expense'] ?? 0;
+
+                        if (income == 0 && expense == 0) return null;
+
+                        return Positioned(
+                          bottom: 0,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (income > 0)
+                                Container(
+                                  margin: const EdgeInsets.only(bottom: 1),
+                                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blueAccent.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+                                  ),
+                                  child: Text(
+                                    _formatCompact(income, provider.locale.languageCode, provider.rate),
+                                    style: const TextStyle(color: Colors.blueAccent, fontSize: 7, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              if (expense > 0)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
+                                  decoration: BoxDecoration(
+                                    color: Colors.pinkAccent.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.pinkAccent.withOpacity(0.3)),
+                                  ),
+                                  child: Text(
+                                    _formatCompact(expense, provider.locale.languageCode, provider.rate),
+                                    style: const TextStyle(color: Colors.pinkAccent, fontSize: 7, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFormatPicker(AppLocalizations l10n, bool isDark, Color textColor, Color glassColor, Color glassBorder) {
+    bool isKo = l10n.locale.languageCode == 'ko';
+    final formats = [
+      {'label': isKo ? '주' : 'Week', 'format': CalendarFormat.week},
+      {'label': isKo ? '2주' : '2 Weeks', 'format': CalendarFormat.twoWeeks},
+      {'label': isKo ? '월' : 'Month', 'format': CalendarFormat.month},
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: glassBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: formats.map((f) {
+          bool isSelected = _calendarFormat == f['format'] as CalendarFormat;
+          return GestureDetector(
+            onTap: () => setState(() => _calendarFormat = f['format'] as CalendarFormat),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.amber.withOpacity(0.8) : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                f['label'] as String,
+                style: TextStyle(
+                  color: isSelected ? Colors.black87 : textColor,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildCharacterSection(AppLocalizations l10n, AppProvider provider, Color glassColor, Color glassBorder, Color textColor, Color secondaryTextColor) {
+    final char = provider.character;
+    final level = char.level;
+    final xpPercent = char.xp / char.maxXP;
+
+    // Determine character icon based on level
+    IconData charIcon = Icons.egg;
+    String charTitle = "Egg (Lv 1)";
+    if (level >= 10) {
+      charIcon = Icons.workspace_premium;
+      charTitle = "Rich King (Lv $level)";
+    } else if (level >= 5) {
+      charIcon = Icons.person;
+      charTitle = "Adult (Lv $level)";
+    } else if (level >= 3) {
+      charIcon = Icons.pets;
+      charTitle = "Pet (Lv $level)";
+    } else if (level >= 2) {
+      charIcon = Icons.pest_control_rodent;
+      charTitle = "Baby (Lv $level)";
+    }
+
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2), // Reduced vertical spacing
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24), // Slightly smaller radius
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), // Compact inner padding
+              decoration: BoxDecoration(
+                color: glassColor,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: glassBorder),
+              ),
+              child: Row(
+                children: [
+                   // Character Visuals
+                   Container(
+                     padding: const EdgeInsets.all(12), // Smaller avatar container
+                     decoration: BoxDecoration(
+                       color: Colors.amber.withOpacity(0.2),
+                       shape: BoxShape.circle,
+                     ),
+                     child: Icon(charIcon, size: 30, color: Colors.amber), // Smaller icon
+                   ),
+                   const SizedBox(width: 16),
+                   // Progress Stats
+                   Expanded(
+                     child: Column(
+                       crossAxisAlignment: CrossAxisAlignment.start,
+                       children: [
+                         Text(charTitle, style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 16)), // Smaller font
+                         const SizedBox(height: 6),
+                         ClipRRect(
+                           borderRadius: BorderRadius.circular(10),
+                           child: LinearProgressIndicator(
+                             value: xpPercent,
+                             backgroundColor: Colors.white.withOpacity(0.1),
+                             valueColor: const AlwaysStoppedAnimation<Color>(Colors.amber),
+                             minHeight: 6, // Slimmer progress bar
+                           ),
+                         ),
+                         const SizedBox(height: 4),
+                         Text("${char.xp} / ${char.maxXP} XP", style: TextStyle(color: secondaryTextColor, fontSize: 11)),
+                       ],
+                     ),
+                   ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryHeader(AppLocalizations l10n, AppProvider provider, Color glassColor, Color glassBorder, Color textColor, Color secondaryTextColor) {
+    final languageCode = provider.locale.languageCode;
+    final rate = provider.rate;
+
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 5, 16, 5),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: glassColor,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: glassBorder),
+              ),
+              child: Column(
+                children: [
+                  Text(l10n.translate('balance'), style: TextStyle(color: secondaryTextColor, fontWeight: FontWeight.w500, fontSize: 13)),
+                  const SizedBox(height: 4),
                   Text(
                     _formatAmount(_totals['balance']!, languageCode, rate),
-                    style: TextStyle(fontSize: 36, fontWeight: FontWeight.w900, letterSpacing: -1, color: textColor),
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -1, color: textColor),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       _buildMiniSummary(l10n.translate('income'), _formatAmount(_totals['income']!, languageCode, rate), Colors.blueAccent, secondaryTextColor),
-                      Container(width: 1, height: 40, color: glassBorder),
+                      Container(width: 1, height: 35, color: glassBorder),
                       _buildMiniSummary(l10n.translate('expense'), _formatAmount(_totals['expense']!, languageCode, rate), Colors.pinkAccent, secondaryTextColor),
                     ],
                   ),
@@ -314,18 +753,27 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildGlassFAB(AppLocalizations l10n, bool isDark) {
     return FloatingActionButton.extended(
       onPressed: () async {
-        final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => const AddScreen()));
-        if (result == true) _refreshData();
+        final result = await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => AddScreen(initialDate: _isDateFiltered ? _selectedDay : null)),
+        );
+        if (result == true) {
+          _refreshData();
+        }
       },
-      backgroundColor: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.2),
       elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30), side: BorderSide(color: Colors.white.withOpacity(0.2))),
+      backgroundColor: Colors.transparent,
       label: ClipRRect(
-        borderRadius: BorderRadius.circular(30),
+        borderRadius: BorderRadius.circular(20),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            decoration: BoxDecoration(
+              color: (isDark ? Colors.white : const Color(0xFF2C3E50)).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: (isDark ? Colors.white : const Color(0xFF2C3E50)).withOpacity(0.2)),
+            ),
             child: Row(
               children: [
                 Icon(Icons.add, color: isDark ? Colors.white : const Color(0xFF2C3E50)),

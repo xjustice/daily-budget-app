@@ -10,10 +10,15 @@ class AppLocalizations {
 
   static const Map<String, Map<String, String>> _localizedValues = {
     'ko': {
-      'app_title': '마이 부켓',
+      'app_title': '가계부',
       'balance': '현재 잔액',
       'income': '수입',
       'expense': '지출',
+      'reset_data': '데이터 초기화',
+      'reset_confirm': '정말로 모든 내역을 삭제하고 캐릭터를 초기 상태로 되돌리시겠습니까?',
+      'today': '오늘',
+      'cancel': '취소',
+      'reset': '초기화',
       'add_record': '새로운 기록',
       'add_title': '내역 추가',
       'empty_state': '첫 내역을 기록해 보세요 🖋️',
@@ -31,6 +36,11 @@ class AppLocalizations {
       'balance': 'Current Balance',
       'income': 'Income',
       'expense': 'Expense',
+      'reset_data': 'Reset Data',
+      'reset_confirm': 'Are you sure you want to delete all records and restart your character?',
+      'today': 'Today',
+      'cancel': 'Cancel',
+      'reset': 'Reset',
       'add_record': 'New Record',
       'add_title': 'Add Entry',
       'empty_state': 'Record your first entry 🖋️',

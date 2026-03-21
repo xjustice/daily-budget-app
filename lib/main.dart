@@ -8,6 +8,8 @@ import 'services/exchange_rate_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'db/db_helper.dart';
+import 'models/character.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,11 +34,13 @@ class AppProvider with ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   double _usdKrwRate = 0.00075;
   bool _isRateUpdated = false;
+  Character _character = Character(level: 1, xp: 0, maxXP: 100, status: 'happy');
 
   Locale get locale => _locale;
   ThemeMode get themeMode => _themeMode;
   double get rate => _usdKrwRate;
   bool get isRateUpdated => _isRateUpdated;
+  Character get character => _character;
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -49,6 +53,8 @@ class AppProvider with ChangeNotifier {
     _themeMode = _parseThemeMode(savedTheme);
 
     _usdKrwRate = await ExchangeRateService.fetchRate();
+    _character = await DBHelper().getCharacter();
+    notifyListeners();
 
     Connectivity().onConnectivityChanged.listen((results) async {
        if (results.contains(ConnectivityResult.wifi)) {
@@ -89,6 +95,39 @@ class AppProvider with ChangeNotifier {
     await prefs.setString('theme', _themeMode == ThemeMode.light ? 'light' : 'dark');
     notifyListeners();
   }
+
+  Future<void> addXP(int amount) async {
+    int newXP = _character.xp + amount;
+    int newLevel = _character.level;
+    int newMaxXP = _character.maxXP;
+
+    while (newXP >= newMaxXP) {
+      newXP -= newMaxXP;
+      newLevel++;
+      newMaxXP = (newMaxXP * 1.2).toInt(); // Level difficulty increase
+    }
+
+    _character = _character.copyWith(
+      level: newLevel,
+      xp: newXP,
+      maxXP: newMaxXP,
+    );
+    
+    await DBHelper().updateCharacter(_character);
+    notifyListeners();
+  }
+
+  void updateCharacterStatus(String status) async {
+    _character = _character.copyWith(status: status);
+    await DBHelper().updateCharacter(_character);
+    notifyListeners();
+  }
+
+  Future<void> resetData() async {
+    await DBHelper().clearAll();
+    _character = Character(level: 1, xp: 0, maxXP: 100, status: 'happy');
+    notifyListeners();
+  }
 }
 
 class BudgetApp extends StatelessWidget {
@@ -104,14 +143,12 @@ class BudgetApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.light,
-        primaryColor: const Color(0xFF1E293B),
         colorSchemeSeed: const Color(0xFF1E293B),
         fontFamily: 'Inter',
       ),
       darkTheme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
-        primaryColor: const Color(0xFFF1F5F9),
         colorSchemeSeed: const Color(0xFF334155),
         fontFamily: 'Inter',
       ),
