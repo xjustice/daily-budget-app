@@ -3,6 +3,7 @@ name: Google Play Store Deploy
 on:
   push:
     branches: [ "main" ]
+      orkfloww_dispatch: 
 
 jobs:
   deploy:
