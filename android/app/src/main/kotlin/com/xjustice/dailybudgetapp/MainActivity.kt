@@ -1,4 +1,4 @@
-package com.example.daily_budget_app
+package com.xjustice.dailybudgetapp
 
 import io.flutter.embedding.android.FlutterActivity
 
